@@ -1,9 +1,14 @@
-use std::time::Instant;
+mod physics;
 
-use nannou::prelude::*;
+use std::time::Instant;
+use physics::*;
+use nannou::{
+    prelude::*,
+    draw::mesh::vertex::Color
+};
 
 // 1 meter = `METER_TO_PIXEL_RATIO` pixels
-const METER_TO_PIXEL_RATIO: f32 = 300.0;
+const METER_TO_PIXEL_RATIO: f32 = 100.0;
 const RADIUS: f32 = 20.0;
 const GRAVITY: f32 = -9.81;
 const RESTITUTION_COEFFICIENT: f32 = 0.85;
@@ -16,58 +21,62 @@ fn main() {
         .run();
 }
 
-struct Circle {
-    vel: Vec2,
-    pos: Vec2,
-    radius: f32,
-}
-
 // A model describing the internal state.
 struct Model {
-    circles: Vec<Circle>,
+    physics_world: PhysicsWorld,
     last_update: Instant,
-    window_dimensions: Vec2,
+    line_start: Point2,
+    line_end: Point2
 }
 
 
 fn model(_app: &App) -> Model {
-    let (width, height) = _app.window_rect().w_h();
+    _app.window(_app.window_id()).unwrap().set_title("phys 1");
+
+    let window_dimensions = _app.window_rect().w_h().into();
     Model {
-        circles: Vec::new(),
+        physics_world: PhysicsWorld::new( 
+            GRAVITY,
+            window_dimensions,
+            METER_TO_PIXEL_RATIO
+        ),
         last_update: Instant::now(),
-        window_dimensions: Vec2::new(width, height)
+        line_start: Point2::ZERO,
+        line_end: Point2::ZERO
     }
 }
 
+
 fn update(_app: &App, model: &mut Model, _update: Update) {
+
+    // Check if the window dimensions have changed
+    let new_dimensions = _app.window_rect().w_h().into();
+    model.physics_world.set_bounds(new_dimensions);
+
+    // Get delta time
     let now = Instant::now();
     let delta_time = now.duration_since(model.last_update).as_secs_f32();
-
-    // Update each circle's position based on elapsed time and acceleration
-    for circle in &mut model.circles {
-        circle.pos.y += circle.vel.y * delta_time + 0.5 * GRAVITY*METER_TO_PIXEL_RATIO * delta_time.powi(2);
-        circle.vel.y += GRAVITY*METER_TO_PIXEL_RATIO * delta_time;
-
-        // Check if the circle has hit the bottom of the screen
-        if circle.pos.y - circle.radius < -model.window_dimensions.y / 2.0 {
-            circle.pos.y = -model.window_dimensions.y / 2.0 + circle.radius;
-            circle.vel.y *= -RESTITUTION_COEFFICIENT;
-        }
-
-    }
+    
+    model.physics_world.step(delta_time);
 
     model.last_update = now;
 
 }
 
+
 // A controller describing how to update the model on certain events.
 fn event(app: &App, model: &mut Model, event: Event) {
-
     match event {
         Event::WindowEvent { simple: None, .. } => (),
         Event::WindowEvent { simple: Some(event), .. } => match event {
             MousePressed(button) => {
                 mouse_pressed_event(&app, model, button);
+            }
+            MouseMoved(position) => {
+                mouse_moved_event(model, position);
+            }
+            MouseReleased(button) => {
+                mouse_released_event(&app, model, button);
             }
             KeyPressed(key) => {
                 key_pressed_event(model, key);
@@ -81,29 +90,45 @@ fn event(app: &App, model: &mut Model, event: Event) {
 
 fn mouse_pressed_event(app: &App, model: &mut Model, button: MouseButton) {
     if button == MouseButton::Left {
-        // The left mouse button is pressed
-        println!("Left mouse button pressed!");
         let mouse_position = app.mouse.position();
-        let circle = Circle {
-            vel: Vec2::new(0.0, 0.0),
+        model.line_start = mouse_position;
+    }
+}
+
+fn mouse_moved_event(model: &mut Model, position: Point2) {
+    model.line_end = position;
+}
+
+fn mouse_released_event(app: &App, model: &mut Model, button: MouseButton) {
+    if button == MouseButton::Left {
+        let offset = (random_f32()*RADIUS*0.5)-(RADIUS*0.25);
+        let mouse_position = app.mouse.position();
+        let vel: Vec2 = (model.line_start - model.line_end).into();
+        let multiplied_velocity = vel*7.0;
+        let circle = Particle {
+            vel: multiplied_velocity,
             pos: Vec2::new(
                 mouse_position.x,
                 mouse_position.y
             ),
-            radius: RADIUS,
+            mass: 10.0,
+            radius: RADIUS+offset,
+            colour: generate_random_colour(),
+            restitution: RESTITUTION_COEFFICIENT
         };
-        model.circles.push(circle);
+        model.physics_world.add_object(circle);
     }
 }
 
 fn key_pressed_event(model: &mut Model, key: Key) {
     match key {
         Key::X => {
-            model.circles = Vec::new()
+            model.physics_world.clear()
         },
         _ => ()
     }
 }
+
 
 // A view describing how to present the model.
 fn view(app: &App, model: &Model, frame: Frame){
@@ -123,6 +148,8 @@ fn view(app: &App, model: &Model, frame: Frame){
     draw_axis_labels(&draw, &window_rect);
 
     draw_circles(&draw, model);
+
+    draw_shoot_overlay(app, &draw, model);
     
     draw_mouse_label(&app, &draw);
 
@@ -171,13 +198,13 @@ fn draw_axis_lines(draw: &Draw, window_rect: &Rect) {
 fn draw_axis_labels(draw: &Draw, window_rect: &Rect) {
     // Crosshair text.
     let line_colour = gray(0.5);
-    let top = format!("{:.1}m", window_rect.top()/METER_TO_PIXEL_RATIO);
-    let bottom = format!("{:.1}m", window_rect.bottom()/METER_TO_PIXEL_RATIO);
-    let left = format!("{:.1}m", window_rect.left()/METER_TO_PIXEL_RATIO);
-    let right = format!("{:.1}m", window_rect.right()/METER_TO_PIXEL_RATIO);
+    let top = format!("{:.3}m", window_rect.top()/METER_TO_PIXEL_RATIO);
+    let bottom = format!("{:.3}m", window_rect.bottom()/METER_TO_PIXEL_RATIO);
+    let left = format!("{:.3}m", window_rect.left()/METER_TO_PIXEL_RATIO);
+    let right = format!("{:.3}m", window_rect.right()/METER_TO_PIXEL_RATIO);
     let x_off = 30.0;
     let y_off = 20.0;
-    draw.text("0.0")
+    draw.text("0, 0")
         .x_y(15.0, 15.0)
         .color(line_colour)
         .font_size(14);
@@ -209,11 +236,11 @@ fn draw_axis_labels(draw: &Draw, window_rect: &Rect) {
 
 fn draw_circles(draw: &Draw, model: &Model) {
     // Draw all the circles in the model
-    for circle in &model.circles {
+    for particle in model.physics_world.get_objects() {
         draw.ellipse()
-            .x_y(circle.pos.x, circle.pos.y)
-            .w_h(circle.radius * 2.0, circle.radius * 2.0)
-            .color(RED);
+            .x_y(particle.pos.x, particle.pos.y)
+            .w_h(particle.radius * 2.0, particle.radius * 2.0)
+            .color(particle.colour);
     }
 }
 
@@ -238,4 +265,26 @@ fn draw_mouse_label(app: &App, draw: &Draw) {
         .xy(mouse_pos + vec2(0.0, 20.0))
         .font_size(14)
         .color(WHITE);
+}
+
+fn draw_shoot_overlay(app: &App, draw: &Draw, model: &Model) {
+    if app.mouse.buttons.left().is_down() {
+        draw.ellipse()
+            .wh([5.0; 2].into())
+            .xy(model.line_start)
+            .color(BLUEVIOLET);
+        draw.line()
+            .start(model.line_start)
+            .end(model.line_end)
+            .weight(2.0)
+            .color(BLUEVIOLET);
+    }
+}
+
+
+fn generate_random_colour() -> Color {
+    let red = random();
+    let green = random();
+    let blue = random();
+    return Color::new(red, green, blue, 1.0)
 }
