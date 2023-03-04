@@ -164,6 +164,7 @@ fn draw_grid(draw: &Draw, window_rect: &Rect, step: f32, weight: f32) {
     let x_iter = r_iter.chain(l_iter);
     for x in x_iter {
         draw.line()
+            .color(color)
             .weight(weight)
             .points(pt2(x, window_rect.bottom()), pt2(x, window_rect.top()));
     }
