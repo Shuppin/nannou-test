@@ -11,7 +11,8 @@ use nannou::{
 const METER_TO_PIXEL_RATIO: f32 = 100.0;
 const RADIUS: f32 = 20.0;
 const GRAVITY: f32 = -9.81;
-const RESTITUTION_COEFFICIENT: f32 = 0.85;
+const _RESTITUTION_COEFFICIENT: f32 = 0.85;
+const LAUNCH_STRENGTH: f32 = 15.0;
 
 fn main() {
     nannou::app(model)
@@ -101,22 +102,42 @@ fn mouse_moved_event(model: &mut Model, position: Point2) {
 
 fn mouse_released_event(app: &App, model: &mut Model, button: MouseButton) {
     if button == MouseButton::Left {
+
         let offset = (random_f32()*RADIUS*0.5)-(RADIUS*0.25);
         let mouse_position = app.mouse.position();
-        let vel: Vec2 = (model.line_start - model.line_end).into();
-        let multiplied_velocity = vel*7.0;
-        let circle = Particle {
-            vel: multiplied_velocity,
-            pos: Vec2::new(
-                mouse_position.x,
-                mouse_position.y
-            ),
-            mass: 10.0,
-            radius: RADIUS+offset,
-            colour: generate_random_colour(),
-            restitution: RESTITUTION_COEFFICIENT
+        
+        // Unused while physics is being reworked
+        let impulse: Vec2 = (model.line_start - model.line_end).into();
+        let multiplied_impulse = impulse*LAUNCH_STRENGTH;
+
+        let id1 = model.physics_world.next_id();
+        let id2 = model.physics_world.next_id();
+
+        let circle1 = Particle::new(
+            model.line_start.clone(),
+            0.0,
+            RADIUS+offset,
+            generate_random_colour(),
+            id1
+        );
+        
+        let circle2 = Particle::new(
+            model.line_end.clone(),
+            10.0,
+            RADIUS+offset,
+            generate_random_colour(),
+            id2
+        );
+        
+        model.physics_world.add_object(circle1);
+        model.physics_world.add_object(circle2);
+        let stick = Stick {
+            id_1: id1,
+            id_2: id2,
+            distance: 100.0,
         };
-        model.physics_world.add_object(circle);
+        model.physics_world.add_stick(stick)
+
     }
 }
 
@@ -125,6 +146,9 @@ fn key_pressed_event(model: &mut Model, key: Key) {
         Key::X => {
             model.physics_world.clear()
         },
+        Key::Space => {
+            model.physics_world.add_impulses(20000.0*random_f32()-10000.0, 20000.0*random_f32()-10000.0)
+        }
         _ => ()
     }
 }
@@ -147,6 +171,7 @@ fn view(app: &App, model: &Model, frame: Frame){
     draw_axis_lines(&draw, &window_rect);
     draw_axis_labels(&draw, &window_rect);
 
+    draw_sticks(&draw, model);
     draw_circles(&draw, model);
 
     draw_shoot_overlay(app, &draw, model);
@@ -162,19 +187,48 @@ fn draw_grid(draw: &Draw, window_rect: &Rect, step: f32, weight: f32) {
     let l_iter = step_by().map(|f| -f).take_while(|&f| f > window_rect.left());
 
     let x_iter = r_iter.chain(l_iter);
-    for x in x_iter {
+    for x in x_iter.clone() {
         draw.line()
-            .color(color)
             .weight(weight)
             .points(pt2(x, window_rect.bottom()), pt2(x, window_rect.top()));
     }
+
     let t_iter = step_by().take_while(|&f| f < window_rect.top());
     let b_iter = step_by().map(|f| -f).take_while(|&f| f > window_rect.bottom());
     let y_iter = t_iter.chain(b_iter);
-    for y in y_iter {
+    for (_i, y) in y_iter.enumerate() {
         draw.line()
             .weight(weight)
             .points(pt2(window_rect.left(), y), pt2(window_rect.right(), y));
+
+        //if alternate_shade {
+        //    for (j, x) in x_iter.clone().enumerate() {
+        //        //if (_i + j) % 2 == 1 {
+        //            draw.rect()
+        //                .color(rgba(1.0, 1.0, 1.0, 0.1))
+        //                .stroke_weight(0.0)
+        //                .x_y(x+step/2.0, y+step/2.0)
+        //                .w_h(step, step);
+        //        //}
+        //    }
+        //}
+
+    }
+}
+
+fn _draw_grid_squares(draw: &Draw, window_rect: &Rect, step: f32) {
+    let x_square_iter = (0..).map(|i| i as f32 * step - step / 2.0).take_while(|&f| f < window_rect.right());
+    let y_square_iter = (0..).map(|i| i as f32 * step - step / 2.0).take_while(|&f| f < window_rect.top());
+    for (i, y) in y_square_iter.enumerate() {
+        for (j, x) in x_square_iter.clone().enumerate() {
+            if (i + j) % 2 == 1 {
+                draw.rect()
+                    .color(rgba(1.0, 1.0, 1.0, 0.1))
+                    .stroke_weight(0.0)
+                    .x_y(x, y)
+                    .w_h(step, step);
+            }
+        }
     }
 }
 
@@ -237,11 +291,24 @@ fn draw_axis_labels(draw: &Draw, window_rect: &Rect) {
 
 fn draw_circles(draw: &Draw, model: &Model) {
     // Draw all the circles in the model
-    for particle in model.physics_world.get_objects() {
+    for particle in model.physics_world.get_particles() {
         draw.ellipse()
             .x_y(particle.pos.x, particle.pos.y)
             .w_h(particle.radius * 2.0, particle.radius * 2.0)
             .color(particle.colour);
+    }
+}
+
+fn draw_sticks(draw: &Draw, model: &mut Model) {
+    let sticks = model.physics_world.get_sticks();
+    for stick in sticks {
+        if let Some(particle1) = model.physics_world.get_particle_by_id(stick.id_1) {
+            if let Some(particle2) = model.physics_world.get_particle_by_id(stick.id_2) {
+                draw.line()
+                    .weight(2.0)
+                    .points(particle1.pos, particle2.pos);
+            } else {};
+        } else {}; 
     }
 }
 
